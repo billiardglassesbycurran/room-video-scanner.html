@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0E1311">
+<title>Room Video Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Camera app: sticky viewfinder with live detection boxes on top, lot ledger with comp links beneath. Single dark theme by design. */
+:root{
+  --bg:#0E1311; --panel:#161D1A; --panel2:#1D2622; --ink:#E6ECE7; --muted:#93A299; --line:#2A3530;
+  --tag:#E8C24A; --tag-ink:#1E1704; --accent:#5FC294; --accent-ink:#08130E; --rec:#FF5A4E;
+  --good:#6FCB92; --warn:#E5A94A; --bad:#F08273;
+  --display:"Bricolage Grotesque","Arial Narrow",system-ui,sans-serif;
+  --body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.5;-webkit-tap-highlight-color:transparent}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+a{color:var(--accent)}
+[hidden]{display:none!important}
+
+.vf{position:sticky;top:0;z-index:5;height:min(58dvh,560px);min-height:300px;background:#000;overflow:hidden}
+.vf video,.vf canvas.ov{position:absolute;inset:0;width:100%;height:100%}
+.vf video{object-fit:cover}
+.vf canvas.ov{touch-action:manipulation}
+.sweep{position:absolute;left:0;right:0;top:0;height:3px;background:var(--tag);box-shadow:0 0 18px 4px rgba(232,194,74,.55);opacity:0;pointer-events:none}
+.sweep.go{animation:sweep .9s ease-out}
+@keyframes sweep{0%{top:0;opacity:1}100%{top:100%;opacity:0}}
+.flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
+.flash.go{animation:fl .35s ease-out}
+@keyframes fl{0%{opacity:.3}100%{opacity:0}}
+.hud{position:absolute;left:0;right:0;top:0;display:flex;justify-content:space-between;align-items:flex-start;gap:8px;pointer-events:none;
+  padding:calc(env(safe-area-inset-top,0px) + 10px) max(12px,env(safe-area-inset-right,0px)) 0 max(12px,env(safe-area-inset-left,0px))}
+.chip{display:inline-flex;align-items:center;gap:7px;background:rgba(10,14,12,.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border-radius:999px;padding:6px 12px;font-size:13px;max-width:62vw}
+.chip .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.chip.live .dot{background:var(--rec);animation:pulse 1.2s infinite}
+.chip.busy .dot{background:var(--tag)}
+@keyframes pulse{50%{opacity:.3}}
+.chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.total{background:var(--tag);color:var(--tag-ink);font-family:var(--mono);font-weight:700;font-size:14px;padding:6px 10px;border-radius:6px;white-space:nowrap;font-variant-numeric:tabular-nums;text-align:right}
+.total small{display:block;font-size:9px;letter-spacing:.14em;text-transform:uppercase;opacity:.7;font-weight:500}
+.idle{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;background:radial-gradient(circle at 50% 40%,#1A2420,#090C0B)}
+.idle h1{font-family:var(--display);font-weight:800;font-size:clamp(28px,8vw,40px);line-height:1;letter-spacing:-.02em;margin:0 0 10px}
+.idle p{margin:0 auto;color:var(--muted);max-width:36ch}
+.controls{position:absolute;left:0;right:0;bottom:0;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;
+  padding:0 max(14px,env(safe-area-inset-right,0px)) 14px max(14px,env(safe-area-inset-left,0px));background:linear-gradient(transparent,rgba(0,0,0,.55))}
+.shutter{width:72px;height:72px;border-radius:50%;border:4px solid var(--ink);background:transparent;display:grid;place-items:center;padding:0}
+.shutter i{width:52px;height:52px;border-radius:50%;background:var(--rec);transition:all .2s}
+.shutter.on i{width:28px;height:28px;border-radius:6px}
+.side{display:flex;gap:8px;align-items:center}
+.side.r{justify-content:flex-end}
+.ghost{background:rgba(10,14,12,.72);border:0;border-radius:999px;padding:9px 13px;font-size:13px;font-weight:600;min-height:40px}
+.ghost:disabled{opacity:.4}
+.icon{width:40px;padding:0;display:grid;place-items:center}
+.icon svg{width:20px;height:20px}
+
+main{padding:16px max(16px,env(safe-area-inset-right,0px)) calc(32px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.ledger-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:end;gap:10px}
+.ledger-head h2{font-family:var(--display);font-weight:600;font-size:20px;margin:0}
+.meta{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+.btns{display:flex;gap:6px;flex-wrap:wrap}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:7px 11px;font-size:13px;font-weight:600;min-height:36px;text-decoration:none;color:var(--ink);display:inline-flex;align-items:center;gap:6px}
+.btn.warn{border-color:var(--bad);color:var(--bad)}
+.btn.ebay{border-color:var(--tag);}
+.notice{border-left:3px solid var(--warn);background:var(--panel);padding:8px 12px;border-radius:0 6px 6px 0;font-size:14px;margin:0}
+.hint{color:var(--muted);font-size:13px;margin:0}
+.lots{display:flex;flex-direction:column;gap:10px}
+.lot{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;display:grid;grid-template-columns:72px minmax(0,1fr);gap:12px;animation:in .4s ease-out}
+.lot.new{border-color:var(--tag)}
+@keyframes in{from{opacity:0;transform:translateY(-6px)}}
+.thumb{width:72px;height:72px;border-radius:6px;overflow:hidden;background:var(--panel2);display:grid;place-items:center;font-family:var(--mono);color:var(--muted)}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.body{display:flex;flex-direction:column;gap:8px;min-width:0}
+.head{display:flex;justify-content:space-between;gap:10px;align-items:start}
+.lotno{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.name{width:100%;background:transparent;border:0;border-bottom:1px dashed var(--line);font-family:var(--display);font-weight:600;font-size:17px;padding:2px 0}
+.details{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font-size:13px}
+.tag{position:relative;flex:none;background:var(--tag);color:var(--tag-ink);font-family:var(--mono);font-weight:700;font-size:14px;padding:4px 8px 4px 20px;clip-path:polygon(11px 0,100% 0,100% 100%,11px 100%,0 50%);border-radius:0 4px 4px 0;display:flex;align-items:center}
+.tag::before{content:"";position:absolute;left:9px;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;background:var(--panel)}
+.tag input{width:64px;background:transparent;border:0;font-family:var(--mono);font-weight:700;font-size:14px;color:var(--tag-ink);padding:0;font-variant-numeric:tabular-nums}
+.tag input::placeholder{color:var(--tag-ink);opacity:.55}
+.acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.acts select{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13px}
+.linkish{background:none;border:0;color:var(--muted);text-decoration:underline;font-size:13px;padding:4px}
+.empty{color:var(--muted);text-align:center;padding:28px 12px;border:1px dashed var(--line);border-radius:10px;margin:0}
+.foot{color:var(--muted);font-size:12px;margin:0}
+
+dialog{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:14px;padding:0;width:min(520px,calc(100vw - 24px));max-height:calc(100dvh - 24px)}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+.sheet{padding:18px;display:flex;flex-direction:column;gap:14px}
+.sheet h2{font-family:var(--display);font-weight:600;font-size:22px;margin:0}
+.f{display:flex;flex-direction:column;gap:5px}
+.f label{font-size:13px;font-weight:600}
+.f .h{font-size:12px;color:var(--muted)}
+.f select{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:14px;width:100%}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.chk{display:flex;gap:10px;align-items:center;font-size:14px}
+.chk input{width:20px;height:20px;accent-color:var(--accent)}
+.sheet .bar{display:flex;justify-content:flex-end;gap:8px}
+.primary{background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:10px 18px;font-weight:700;min-height:44px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<section class="vf" id="vf">
+  <video id="video" playsinline muted autoplay></video>
+  <canvas class="ov" id="ov" aria-label="Detected objects. Tap a box to add it."></canvas>
+  <div class="sweep" id="sweep"></div>
+  <div class="flash" id="flash"></div>
+  <div class="idle" id="idle">
+    <div>
+      <h1>Room Video Scanner</h1>
+      <p>Tap the red button and slowly pan the room. Sellable objects get boxed live, and every few seconds new ones drop into your lot list with links to eBay sold prices and Google.</p>
+    </div>
+  </div>
+  <div class="hud">
+    <div class="chip" id="chip"><i class="dot"></i><span id="status">Ready</span></div>
+    <div class="total"><small>Your prices</small><span id="total">$0</span></div>
+  </div>
+  <div class="controls">
+    <div class="side">
+      <button class="ghost icon" id="settings-btn" aria-label="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg></button>
+    </div>
+    <button class="shutter" id="shutter" aria-label="Start scanning"><i></i></button>
+    <div class="side r">
+      <button class="ghost" id="now-btn" disabled>Capture now</button>
+    </div>
+  </div>
+</section>
+
+<main>
+  <p class="notice" id="notice" hidden></p>
+  <div class="ledger-head">
+    <div>
+      <h2>Lots found</h2>
+      <div class="meta" id="meta">0 lots</div>
+    </div>
+    <div class="btns">
+      <button class="btn" id="copy-btn">Copy list</button>
+      <button class="btn" id="clear-btn">New room</button>
+    </div>
+  </div>
+  <p class="hint">For each lot: tap <b>Lens</b> to identify the exact brand and model, add it to the details line, then check <b>eBay sold</b> and type the price on the tag.</p>
+  <div class="lots" id="lots"></div>
+  <p class="foot">Object detection runs on this phone. No photos are uploaded except the ones you choose to share with Google Lens. The detector knows about 30 kinds of sellable things (furniture, TVs, laptops, appliances, bikes, bags, sports gear, clocks, vases, books). It can't see guitars, lamps, art or audio gear, so tap <b>Capture now</b> and rename the lot for those. Lots are saved in this browser. <span id="ver"></span></p>
+</main>
+
+<dialog id="dlg">
+  <form class="sheet" method="dialog" id="settings-form">
+    <h2>Scanner settings</h2>
+    <div class="row2">
+      <div class="f">
+        <label for="s-int">Capture every</label>
+        <select id="s-int"><option value="2">2 seconds</option><option value="3">3 seconds</option><option value="5">5 seconds</option><option value="8">8 seconds</option></select>
+      </div>
+      <div class="f">
+        <label for="s-conf">Minimum certainty</label>
+        <select id="s-conf"><option value="0.5">50%</option><option value="0.6">60%</option><option value="0.7">70%</option></select>
+      </div>
+    </div>
+    <div class="f">
+      <label for="s-model">Detector</label>
+      <select id="s-model"><option value="lite_mobilenet_v2">Fast (smoother on older phones)</option><option value="mobilenet_v2">Accurate (catches more, slower)</option></select>
+      <span class="h">Changing this reloads the detector.</span>
+    </div>
+    <label class="chk"><input type="checkbox" id="s-all"> Show non-sellable objects in grey (people, cups, plants)</label>
+    <div class="bar"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="primary" value="save">Save</button></div>
+  </form>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3"></script>
+<script>
+(function(){
+"use strict";
+const VERSION = "v2 · on-device";
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = n => "$" + Math.round(n).toLocaleString("en-US");
+const pad = n => String(n).padStart(2, "0");
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+$("#ver").textContent = VERSION;
+
+/* Detector class -> lot name. Classes not listed are never captured. */
+const SELL = {
+  "couch":"Sofa", "chair":"Chair", "bed":"Bed frame", "dining table":"Table", "bench":"Bench",
+  "tv":"TV", "laptop":"Laptop", "cell phone":"Phone", "keyboard":"Keyboard", "mouse":"Computer mouse",
+  "microwave":"Microwave", "oven":"Oven", "toaster":"Toaster", "refrigerator":"Refrigerator", "hair drier":"Hair dryer",
+  "bicycle":"Bicycle", "motorcycle":"Motorcycle", "skateboard":"Skateboard", "surfboard":"Surfboard", "skis":"Skis",
+  "snowboard":"Snowboard", "tennis racket":"Tennis racket", "baseball bat":"Baseball bat", "baseball glove":"Baseball glove",
+  "backpack":"Backpack", "handbag":"Handbag", "suitcase":"Suitcase", "clock":"Clock", "vase":"Vase",
+  "book":"Books", "teddy bear":"Stuffed toy"
+};
+const GROUP = new Set(["book"]); // many small ones collapse into one lot
+
+/* ---------- settings + storage ---------- */
+const SKEY = "rvs2.settings", IKEY = "rvs2.items";
+const S = { interval:3, conf:0.6, model:"lite_mobilenet_v2", showAll:false };
+try { Object.assign(S, JSON.parse(localStorage.getItem(SKEY) || "{}")); } catch {}
+let items = [];
+try { items = JSON.parse(localStorage.getItem(IKEY) || "[]"); if (!Array.isArray(items)) items = []; } catch { items = []; }
+const saveS = () => { try { localStorage.setItem(SKEY, JSON.stringify(S)); } catch {} };
+function saveI(){
+  for (let tries = 0; tries < 40; tries++) {
+    try { localStorage.setItem(IKEY, JSON.stringify(items)); return; }
+    catch { const old = items.find(i => i.crop); if (!old) return; old.crop = ""; } // out of space: drop oldest large photo
+  }
+}
+
+$("#settings-btn").onclick = () => {
+  $("#s-int").value = String(S.interval); $("#s-conf").value = String(S.conf); $("#s-model").value = S.model; $("#s-all").checked = S.showAll;
+  $("#dlg").showModal();
+};
+$("#settings-form").addEventListener("submit", e => {
+  if (e.submitter?.value !== "save") return;
+  const prevModel = S.model;
+  S.interval = +$("#s-int").value; S.conf = +$("#s-conf").value; S.model = $("#s-model").value; S.showAll = $("#s-all").checked;
+  saveS();
+  if (S.model !== prevModel) { model = null; if (stream) loadModel(); }
+});
+
+function showNotice(t){ const n = $("#notice"); n.textContent = t || ""; n.hidden = !t; }
+if (!window.isSecureContext) showNotice("The camera only works when this page is opened over https, such as your GitHub Pages link.");
+
+/* ---------- state ---------- */
+const video = $("#video"), ov = $("#ov"), octx = ov.getContext("2d");
+let stream = null, model = null, loading = false, running = false, timer = null, nextAt = 0, wake = null;
+let dets = [], detecting = false, lastSig = null, prevBatch = [], fresh = new Set();
+
+function setStatus(text, mode){
+  $("#status").textContent = text;
+  const c = $("#chip"); c.classList.toggle("live", mode === "live"); c.classList.toggle("busy", mode === "busy");
+}
+function updateUI(){
+  const sh = $("#shutter"); sh.classList.toggle("on", running); sh.setAttribute("aria-label", running ? "Pause scanning" : "Start scanning");
+  $("#now-btn").disabled = !stream || !model;
+  const priced = items.filter(i => Number(i.price) > 0 && i.status !== "Keeping");
+  $("#total").textContent = money(priced.reduce((s, i) => s + Number(i.price), 0));
+  $("#meta").textContent = `${items.length} lot${items.length === 1 ? "" : "s"} · ${priced.length} priced`;
+}
+
+/* ---------- camera + model ---------- */
+async function openCamera(){
+  if (stream) return true;
+  if (!navigator.mediaDevices?.getUserMedia) { showNotice("This browser can't open the camera. Use Chrome on Android or Safari on iPhone, over https."); return false; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio:false, video:{ facingMode:{ ideal:"environment" }, width:{ ideal:1920 }, height:{ ideal:1080 } } });
+  } catch (e) {
+    const n = e?.name || "";
+    showNotice(n === "NotAllowedError" ? "Camera access was blocked. In Chrome, tap the icon left of the address, open Permissions, and allow Camera."
+      : n === "NotFoundError" ? "No camera was found on this device."
+      : n === "NotReadableError" ? "Another app is using the camera. Close it and try again."
+      : "The camera couldn't start (" + (n || "unknown error") + ").");
+    return false;
+  }
+  video.srcObject = stream;
+  try { await video.play(); } catch {}
+  $("#idle").hidden = true;
+  detectLoop();
+  return true;
+}
+async function loadModel(){
+  if (model || loading) return !!model;
+  if (!window.cocoSsd || !window.tf) { showNotice("The detector didn't download. Check your connection and reload the page."); return false; }
+  loading = true; setStatus("Loading detector… first time takes a few seconds", "busy");
+  try { model = await cocoSsd.load({ base: S.model }); setStatus(running ? "Scanning" : "Detector ready", running ? "live" : ""); }
+  catch { showNotice("The detector couldn't load. Check your connection and reload the page."); model = null; }
+  loading = false; updateUI(); return !!model;
+}
+async function lockWake(){ try { wake = await navigator.wakeLock?.request("screen"); } catch { wake = null; } }
+function unlockWake(){ try { wake?.release(); } catch {} wake = null; }
+
+async function start(){
+  if (!(await openCamera())) return;
+  if (!(await loadModel())) return;
+  running = true; nextAt = Date.now() + 1500;
+  clearInterval(timer); timer = setInterval(tick, 250);
+  lockWake(); setStatus("Scanning", "live"); updateUI();
+}
+function pause(reason){ running = false; clearInterval(timer); timer = null; unlockWake(); setStatus(reason || "Paused · tap boxes to add"); updateUI(); }
+$("#shutter").onclick = () => running ? pause() : start();
+$("#now-btn").onclick = () => capture(true);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && running) pause("Paused while the app was in the background");
+  else if (!document.hidden && running) lockWake();
+});
+window.addEventListener("pagehide", () => { pause(); stream?.getTracks().forEach(t => t.stop()); });
+
+/* ---------- live detection ---------- */
+const det = document.createElement("canvas"), dctx = det.getContext("2d", { willReadFrequently: true });
+async function detectLoop(){
+  if (!stream) return;
+  if (model && !detecting && video.readyState >= 2 && video.videoWidth) {
+    detecting = true;
+    const vw = video.videoWidth, vh = video.videoHeight, W = 480, H = Math.round(480 * vh / vw);
+    if (det.width !== W || det.height !== H) { det.width = W; det.height = H; }
+    dctx.drawImage(video, 0, 0, W, H);
+    try {
+      const out = await model.detect(det, 25, 0.4);
+      dets = out.map(d => ({ cls: d.class, score: d.score, x: d.bbox[0] / W, y: d.bbox[1] / H, w: d.bbox[2] / W, h: d.bbox[3] / H }));
+    } catch { dets = []; }
+    detecting = false;
+    draw();
+  }
+  setTimeout(() => requestAnimationFrame(detectLoop), 90);
+}
+function viewMap(){
+  const r = ov.getBoundingClientRect(), vw = video.videoWidth, vh = video.videoHeight;
+  const s = Math.max(r.width / vw, r.height / vh);
+  return { r, s, dx: (r.width - vw * s) / 2, dy: (r.height - vh * s) / 2, vw, vh };
+}
+function toScreen(m, d){ return { x: m.dx + d.x * m.vw * m.s, y: m.dy + d.y * m.vh * m.s, w: d.w * m.vw * m.s, h: d.h * m.vh * m.s }; }
+function draw(){
+  const dpr = window.devicePixelRatio || 1, m = viewMap();
+  if (ov.width !== Math.round(m.r.width * dpr) || ov.height !== Math.round(m.r.height * dpr)) { ov.width = Math.round(m.r.width * dpr); ov.height = Math.round(m.r.height * dpr); }
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0); octx.clearRect(0, 0, m.r.width, m.r.height);
+  octx.font = "600 12px 'Public Sans', system-ui, sans-serif"; octx.textBaseline = "top";
+  for (const d of dets) {
+    const sell = SELL[d.cls] && d.score >= S.conf;
+    if (!sell && !S.showAll) continue;
+    const b = toScreen(m, d), col = sell ? "#E8C24A" : "rgba(200,210,205,.55)";
+    octx.lineWidth = sell ? 2.5 : 1.5; octx.strokeStyle = col; octx.strokeRect(b.x, b.y, b.w, b.h);
+    const label = (SELL[d.cls] || d.cls) + " " + Math.round(d.score * 100) + "%" + (sell ? "  +" : "");
+    const tw = octx.measureText(label).width + 10, ly = b.y > 20 ? b.y - 20 : b.y + 2;
+    octx.fillStyle = sell ? "#E8C24A" : "rgba(20,26,23,.8)"; octx.fillRect(b.x, ly, tw, 18);
+    octx.fillStyle = sell ? "#1E1704" : "#E6ECE7"; octx.fillText(label, b.x + 5, ly + 3);
+  }
+}
+window.addEventListener("resize", draw);
+
+/* tap a box to add just that object */
+ov.addEventListener("click", e => {
+  if (!stream || !model) return;
+  const m = viewMap(), px = e.clientX - m.r.left, py = e.clientY - m.r.top;
+  const hit = dets.filter(d => SELL[d.cls]).map(d => ({ d, b: toScreen(m, d) }))
+    .filter(o => px >= o.b.x && px <= o.b.x + o.b.w && py >= o.b.y && py <= o.b.y + o.b.h)
+    .sort((a, b) => a.b.w * a.b.h - b.b.w * b.b.h)[0];
+  if (hit) capture(false, [hit.d]);
+});
+
+/* ---------- increments ---------- */
+function signature(){
+  const W = 32, H = 18, c = document.createElement("canvas"); c.width = W; c.height = H;
+  const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(video, 0, 0, W, H);
+  const d = g.getImageData(0, 0, W, H).data, s = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) s[i] = d[i*4] * .299 + d[i*4+1] * .587 + d[i*4+2] * .114;
+  return s;
+}
+const sigDiff = (a, b) => { let t = 0; for (let i = 0; i < a.length; i++) t += Math.abs(a[i] - b[i]); return t / a.length; };
+
+function tick(){
+  if (!running) return;
+  const now = Date.now();
+  if (now < nextAt) { if (!loading) setStatus(`Scanning · next capture in ${Math.ceil((nextAt - now) / 1000)}s`, "live"); return; }
+  nextAt = now + S.interval * 1000;
+  const sig = signature();
+  if (lastSig && sigDiff(sig, lastSig) < 5) { setStatus("Same view · pan to a new area", "live"); nextAt = now + 1000; return; }
+  lastSig = sig;
+  capture(false);
+}
+
+/* perceptual hash of a crop, to spot the same object seen again */
+function dhash(src, sx, sy, sw, sh){
+  const c = document.createElement("canvas"); c.width = 9; c.height = 8;
+  const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(src, sx, sy, sw, sh, 0, 0, 9, 8);
+  const d = g.getImageData(0, 0, 9, 8).data; let bits = "";
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+    const i = (y * 9 + x) * 4, j = i + 4;
+    bits += (d[i] + d[i+1] + d[i+2]) > (d[j] + d[j+1] + d[j+2]) ? "1" : "0";
+  }
+  return bits;
+}
+const ham = (a, b) => { let n = 0; for (let i = 0; i < 64; i++) if (a[i] !== b[i]) n++; return n; };
+
+function capture(forced, only){
+  if (!stream || !video.videoWidth) return;
+  const vw = video.videoWidth, vh = video.videoHeight, s = Math.min(1, 1600 / Math.max(vw, vh));
+  const frame = document.createElement("canvas"); frame.width = Math.round(vw * s); frame.height = Math.round(vh * s);
+  frame.getContext("2d").drawImage(video, 0, 0, frame.width, frame.height);
+  const FW = frame.width, FH = frame.height;
+
+  let cands = (only || dets).filter(d => SELL[d.cls] && (only || d.score >= S.conf) && d.w * d.h >= 0.008);
+  // collapse grouped classes (books) into one box covering all of them
+  for (const cls of GROUP) {
+    const g = cands.filter(d => d.cls === cls);
+    if (g.length > 1) {
+      const x1 = Math.min(...g.map(d => d.x)), y1 = Math.min(...g.map(d => d.y)), x2 = Math.max(...g.map(d => d.x + d.w)), y2 = Math.max(...g.map(d => d.y + d.h));
+      cands = cands.filter(d => d.cls !== cls).concat([{ cls, score: Math.max(...g.map(d => d.score)), x: x1, y: y1, w: x2 - x1, h: y2 - y1, count: g.length }]);
+    }
+  }
+
+  const fx = $("#flash"), sw = $("#sweep");
+  fx.classList.remove("go"); sw.classList.remove("go"); void fx.offsetWidth; fx.classList.add("go"); sw.classList.add("go");
+
+  // "Capture now" with nothing detected: save the middle of the frame as an unnamed lot
+  if (!cands.length && forced) cands = [{ cls: "", score: 0, x: .2, y: .15, w: .6, h: .7 }];
+
+  const batch = [], added = [];
+  let lot = items.reduce((m, i) => Math.max(m, i.lot), 0);
+  for (const d of cands) {
+    const bx = d.x * FW, by = d.y * FH, bw = d.w * FW, bh = d.h * FH;
+    const cx = d.x + d.w / 2, cy = d.y + d.h / 2;
+    const hash = dhash(frame, bx, by, Math.max(1, bw), Math.max(1, bh));
+    // same object? continuity with last capture, or a near-identical look
+    const same = d.cls && items.find(i => i.cls === d.cls && (
+      ham(i.hash, hash) <= 10 ||
+      prevBatch.some(p => p.id === i.id && Math.hypot(p.cx - cx, p.cy - cy) < 0.28)));
+    if (same && !only) { batch.push({ id: same.id, cx, cy }); continue; }  // a tapped box always adds
+    const side = Math.max(bw, bh) * 1.12;
+    const sx = clamp(bx + bw / 2 - side / 2, 0, Math.max(0, FW - side)), sy = clamp(by + bh / 2 - side / 2, 0, Math.max(0, FH - side));
+    const sz = Math.min(side, FW, FH);
+    const rec = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      lot: ++lot, cls: d.cls, name: d.cls ? SELL[d.cls] + (d.count ? ` (about ${d.count})` : "") : "Unnamed item",
+      details: "", price: "", status: "To sell", hash,
+      thumb: cropURL(frame, sx, sy, sz, 144, .7), crop: cropURL(frame, sx, sy, sz, 560, .8), at: Date.now()
+    };
+    items.push(rec); added.push(rec); batch.push({ id: rec.id, cx, cy });
+  }
+  prevBatch = batch;
+  if (added.length) { added.forEach(a => fresh.add(a.id)); saveI(); renderLots(); }
+  setStatus(added.length ? `+${added.length} new lot${added.length > 1 ? "s" : ""}` : cands.length ? "Already logged · keep panning" : "Nothing sellable in view", running ? "live" : "");
+  updateUI();
+}
+function cropURL(src, sx, sy, sz, out, q){
+  const c = document.createElement("canvas"); c.width = c.height = out;
+  c.getContext("2d").drawImage(src, sx, sy, sz, sz, 0, 0, out, out);
+  return c.toDataURL("image/jpeg", q);
+}
+
+/* ---------- ledger ---------- */
+const query = i => (i.details ? i.details + " " : "") + i.name.replace(/\s*\(about \d+\)/, "");
+const ebay = q => "https://www.ebay.com/sch/i.html?_nkw=" + encodeURIComponent(q) + "&LH_Sold=1&LH_Complete=1&_sop=13";
+const gshop = q => "https://www.google.com/search?tbm=shop&q=" + encodeURIComponent(q + " used");
+const canShareFiles = (() => { try { return !!navigator.canShare && navigator.canShare({ files: [new File([""], "t.jpg", { type: "image/jpeg" })] }); } catch { return false; } })();
+
+async function lens(it, btn){
+  const src = it.crop || it.thumb;
+  try {
+    const blob = await (await fetch(src)).blob();
+    const file = new File([blob], `lot-${pad(it.lot)}.jpg`, { type: "image/jpeg" });
+    if (canShareFiles) { await navigator.share({ files: [file], title: it.name }); return; }
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = file.name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    btn.textContent = "Saved photo · open in Lens";
+  } catch (e) { if (e?.name !== "AbortError") btn.textContent = "Couldn't share"; }
+}
+
+function renderLots(){
+  const box = $("#lots"); box.innerHTML = "";
+  if (!items.length) { box.innerHTML = `<p class="empty">No lots yet. Start scanning, or tap any yellow box on the camera to add it.</p>`; updateUI(); return; }
+  for (const it of items.slice().reverse()) {
+    const el = document.createElement("article");
+    el.className = "lot" + (fresh.has(it.id) ? " new" : "");
+    el.innerHTML = `
+      <div class="thumb">${it.thumb ? `<img alt="" src="${it.thumb}">` : pad(it.lot)}</div>
+      <div class="body">
+        <div class="head">
+          <div style="min-width:0;flex:1">
+            <div class="lotno">Lot ${pad(it.lot)}</div>
+            <input class="name" id="n-${it.id}" value="${esc(it.name)}" aria-label="Lot ${it.lot} name">
+          </div>
+          <label class="tag" for="p-${it.id}">$<input id="p-${it.id}" inputmode="decimal" placeholder="price" value="${esc(it.price)}" aria-label="Your price for lot ${it.lot}"></label>
+        </div>
+        <input class="details" id="d-${it.id}" placeholder="Brand, model, size (find it with Lens)" value="${esc(it.details)}" aria-label="Details for lot ${it.lot}">
+        <div class="acts">
+          <button class="btn" data-a="lens">${canShareFiles ? "Lens" : "Save photo for Lens"}</button>
+          <a class="btn ebay" data-a="ebay" href="${ebay(query(it))}" target="_blank" rel="noopener">eBay sold ↗</a>
+          <a class="btn" data-a="gshop" href="${gshop(query(it))}" target="_blank" rel="noopener">Google Shopping ↗</a>
+        </div>
+        <div class="acts">
+          <select id="s-${it.id}" aria-label="Status for lot ${it.lot}">${["To sell","Listed","Sold","Keeping"].map(s => `<option ${s === it.status ? "selected" : ""}>${s}</option>`).join("")}</select>
+          <button class="linkish" data-a="rm">Remove</button>
+        </div>
+      </div>`;
+    const refreshLinks = () => { el.querySelector('[data-a="ebay"]').href = ebay(query(it)); el.querySelector('[data-a="gshop"]').href = gshop(query(it)); };
+    el.querySelector(".name").addEventListener("change", e => { it.name = e.target.value.trim() || it.name; saveI(); refreshLinks(); });
+    el.querySelector(".details").addEventListener("change", e => { it.details = e.target.value.trim(); saveI(); refreshLinks(); });
+    el.querySelector(".tag input").addEventListener("change", e => { const n = parseFloat(String(e.target.value).replace(/[^0-9.]/g, "")); it.price = Number.isFinite(n) ? String(n) : ""; e.target.value = it.price; saveI(); updateUI(); });
+    el.querySelector("select").addEventListener("change", e => { it.status = e.target.value; saveI(); updateUI(); });
+    el.querySelector('[data-a="lens"]').onclick = e => lens(it, e.currentTarget);
+    el.querySelector('[data-a="rm"]').onclick = () => { items = items.filter(x => x.id !== it.id); saveI(); renderLots(); };
+    box.append(el);
+  }
+  updateUI();
+}
+
+$("#copy-btn").onclick = async () => {
+  const txt = items.map(i => `Lot ${pad(i.lot)}  ${i.name}${i.details ? " · " + i.details : ""}  ${i.price ? money(i.price) : "(no price)"}  [${i.status}]`).join("\n")
+    + "\n\nTotal priced: " + $("#total").textContent;
+  const b = $("#copy-btn");
+  try { await navigator.clipboard.writeText(txt); b.textContent = "Copied"; } catch { b.textContent = "Copy failed"; }
+  setTimeout(() => b.textContent = "Copy list", 1600);
+};
+let armed = null;
+$("#clear-btn").onclick = () => {
+  const b = $("#clear-btn");
+  if (!armed) { b.textContent = "Tap again to clear"; b.classList.add("warn"); armed = setTimeout(() => { armed = null; b.textContent = "New room"; b.classList.remove("warn"); }, 3000); return; }
+  clearTimeout(armed); armed = null; b.textContent = "New room"; b.classList.remove("warn");
+  items = []; prevBatch = []; lastSig = null; fresh.clear(); saveI(); renderLots();
+};
+
+renderLots(); updateUI();
+})();
+</script>
+</body>
+</html>
