@@ -72,6 +72,10 @@ main{padding:16px max(16px,env(safe-area-inset-right,0px)) calc(32px + env(safe-
 .btn.ebay{border-color:var(--tag);}
 .btn.off{opacity:.4;border-color:var(--line)}
 .needname{font-size:12px;color:var(--warn);margin:0}
+.steps{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.steps p{margin:0}
+.steps ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:3px;color:var(--muted)}
+.steps ol b{color:var(--ink)}
 .name::placeholder{color:var(--warn);opacity:.9}
 .notice{border-left:3px solid var(--warn);background:var(--panel);padding:8px 12px;border-radius:0 6px 6px 0;font-size:14px;margin:0}
 .hint{color:var(--muted);font-size:13px;margin:0}
@@ -152,9 +156,9 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
       <button class="btn" id="clear-btn">New room</button>
     </div>
   </div>
-  <p class="hint">For each lot: tap <b>Lens</b> to identify the exact brand and model, add it to the details line, then check <b>eBay sold</b> and type the price on the tag.</p>
+  <p class="hint">For each lot: tap <b>Google Lens</b> to see items that look like yours, with prices. Put the exact brand and model in the details line, then check <b>eBay sold</b> and type your price on the tag.</p>
   <div class="lots" id="lots"></div>
-  <p class="foot">Object detection runs on this phone. No photos are uploaded except the ones you choose to share with Google Lens. The detector knows about 30 kinds of sellable things (furniture, TVs, laptops, appliances, bikes, bags, sports gear, clocks, vases, books). It can't see guitars, lamps, art or audio gear, so tap <b>Capture now</b> and rename the lot for those. Lots are saved in this browser. <span id="ver"></span></p>
+  <p class="foot">Detection runs on this phone. Yellow boxes find about 30 kinds of things anywhere in view. The center circle names about 100 more when you aim at them, such as instruments, audio and camera gear, tools, appliances, vacuums and sunglasses. Tap inside the circle to add what it names. Neither one knows specialty equipment, art or collectibles, so use <b>Capture now</b> and Google Lens for those. A photo leaves the phone only when you tap Google Lens or Share photo. Lots are saved in this browser. <span id="ver"></span></p>
 </main>
 
 <dialog id="dlg">
@@ -182,10 +186,11 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1"></script>
 <script>
 (function(){
 "use strict";
-const VERSION = "v2.1 · on-device";
+const VERSION = "v3.1 · on-device";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const money = n => "$" + Math.round(n).toLocaleString("en-US");
@@ -196,7 +201,7 @@ $("#ver").textContent = VERSION;
 /* Detector class -> lot name. Classes not listed are never captured. */
 const SELL = {
   "couch":"Sofa", "chair":"Chair", "bed":"Bed frame", "dining table":"Table", "bench":"Bench",
-  "tv":"TV", "laptop":"Laptop", "cell phone":"Phone", "keyboard":"Keyboard", "mouse":"Computer mouse",
+  "tv":"TV or monitor", "laptop":"Laptop", "cell phone":"Phone", "keyboard":"Keyboard", "mouse":"Computer mouse",
   "microwave":"Microwave", "oven":"Oven", "toaster":"Toaster", "refrigerator":"Refrigerator", "hair drier":"Hair dryer",
   "bicycle":"Bicycle", "motorcycle":"Motorcycle", "skateboard":"Skateboard", "surfboard":"Surfboard", "skis":"Skis",
   "snowboard":"Snowboard", "tennis racket":"Tennis racket", "baseball bat":"Baseball bat", "baseball glove":"Baseball glove",
@@ -204,6 +209,36 @@ const SELL = {
   "book":"Books", "teddy bear":"Stuffed toy"
 };
 const GROUP = new Set(["book"]); // many small ones collapse into one lot
+
+/* Center-circle classifier (ImageNet). Only these labels count as sellable. Key = first name in the label. */
+const IMNET = {
+  "acoustic guitar":"Acoustic guitar","electric guitar":"Electric guitar","banjo":"Banjo","violin":"Violin","cello":"Cello",
+  "grand piano":"Grand piano","upright":"Upright piano","harp":"Harp","accordion":"Accordion","sax":"Saxophone","cornet":"Trumpet",
+  "trombone":"Trombone","french horn":"French horn","drum":"Drum","harmonica":"Harmonica","jukebox":"Jukebox",
+  "desktop computer":"Desktop computer","monitor":"Computer monitor","screen":"Monitor","television":"TV","notebook":"Laptop",
+  "hand-held computer":"Handheld computer","ipod":"iPod or MP3 player","cellular telephone":"Cell phone","printer":"Printer",
+  "projector":"Projector","loudspeaker":"Speaker","tape player":"Tape player","cassette player":"Cassette player",
+  "cd player":"CD player","radio":"Radio","joystick":"Game controller","modem":"Modem or router","hard disc":"Hard drive",
+  "computer keyboard":"Keyboard","typewriter keyboard":"Typewriter","mouse":"Computer mouse",
+  "digital clock":"Digital clock","wall clock":"Wall clock","analog clock":"Clock","digital watch":"Watch","stopwatch":"Stopwatch",
+  "reflex camera":"Camera","polaroid camera":"Polaroid camera","binoculars":"Binoculars","tripod":"Tripod","microscope":"Microscope",
+  "loupe":"Loupe","oscilloscope":"Oscilloscope","scale":"Scale","magnetic compass":"Compass",
+  "sewing machine":"Sewing machine","espresso maker":"Espresso machine","coffeemaker":"Coffee maker","waffle iron":"Waffle maker",
+  "toaster":"Toaster","microwave":"Microwave","crock pot":"Slow cooker","dutch oven":"Dutch oven","teapot":"Teapot","wok":"Wok",
+  "washer":"Washing machine","dishwasher":"Dishwasher","refrigerator":"Refrigerator","space heater":"Space heater",
+  "electric fan":"Fan","vacuum":"Vacuum cleaner","iron":"Clothes iron","hair spray":"",
+  "table lamp":"Table lamp","lampshade":"Lamp","studio couch":"Sofa bed","rocking chair":"Rocking chair","folding chair":"Folding chair",
+  "barber chair":"Barber chair","desk":"Desk","dining table":"Table","chiffonier":"Dresser","china cabinet":"China cabinet",
+  "wardrobe":"Wardrobe","bookcase":"Bookcase","file":"Filing cabinet","safe":"Safe","chest":"Chest","crib":"Crib","cradle":"Cradle",
+  "bassinet":"Bassinet","four-poster":"Bed","quilt":"Quilt","vase":"Vase","pool table":"Pool table","pinball machine":"Pinball machine",
+  "slot":"Slot machine","dumbbell":"Dumbbells","barbell":"Barbell","mountain bike":"Mountain bike","tricycle":"Tricycle",
+  "moped":"Moped","go-kart":"Go-kart","golfcart":"Golf cart","snowmobile":"Snowmobile","lawn mower":"Lawn mower",
+  "chain saw":"Chainsaw","power drill":"Power drill","sunglasses":"Sunglasses","sunglass":"Sunglasses","purse":"Purse",
+  "backpack":"Backpack","wallet":"Wallet","running shoe":"Sneakers","cowboy boot":"Cowboy boots","fur coat":"Fur coat",
+  "suit":"Suit","teddy":"Stuffed toy","jigsaw puzzle":"Jigsaw puzzle","rifle":"","revolver":"","assault rifle":""
+};
+const imKey = cn => String(cn || "").split(",")[0].trim().toLowerCase();
+const AIM = 0.45; // circle covers the center 45% of the shorter side
 
 /* ---------- settings + storage ---------- */
 const SKEY = "rvs2.settings", IKEY = "rvs2.items";
@@ -269,6 +304,7 @@ async function openCamera(){
   try { await video.play(); } catch {}
   $("#idle").hidden = true;
   detectLoop();
+  if (net) aimLoop();
   return true;
 }
 async function loadModel(){
@@ -277,8 +313,42 @@ async function loadModel(){
   loading = true; setStatus("Loading detector… first time takes a few seconds", "busy");
   try { model = await cocoSsd.load({ base: S.model }); setStatus(running ? "Scanning" : "Detector ready", running ? "live" : ""); }
   catch { showNotice("The detector couldn't load. Check your connection and reload the page."); model = null; }
-  loading = false; updateUI(); return !!model;
+  loading = false; updateUI();
+  if (model) loadNet(); // center-circle model loads in the background
+  return !!model;
 }
+
+/* ---------- center circle: names what you aim at ---------- */
+let net = null, netLoading = false, aim = null, classifying = false;
+const aimCanvas = document.createElement("canvas"); aimCanvas.width = aimCanvas.height = 224;
+const aimCtx = aimCanvas.getContext("2d", { willReadFrequently: true });
+async function loadNet(){
+  if (net || netLoading || !window.mobilenet) return;
+  netLoading = true;
+  try { net = await mobilenet.load({ version: 2, alpha: 1.0 }); aimLoop(); } catch { net = null; }
+  netLoading = false;
+}
+function aimRegion(){
+  const vw = video.videoWidth, vh = video.videoHeight, side = AIM * Math.min(vw, vh);
+  return { x: (vw - side) / 2 / vw, y: (vh - side) / 2 / vh, w: side / vw, h: side / vh, side };
+}
+async function aimLoop(){
+  if (!stream || !net) return;
+  if (!classifying && video.readyState >= 2 && video.videoWidth) {
+    classifying = true;
+    const vw = video.videoWidth, vh = video.videoHeight, side = AIM * Math.min(vw, vh);
+    aimCtx.drawImage(video, (vw - side) / 2, (vh - side) / 2, side, side, 0, 0, 224, 224);
+    try {
+      const preds = await net.classify(aimCanvas, 3);
+      const hit = preds.find(p => IMNET[imKey(p.className)] && p.probability >= 0.3);
+      aim = hit ? { key: imKey(hit.className), name: IMNET[imKey(hit.className)], prob: hit.probability, sell: true, at: Date.now() }
+                : { name: imKey(preds[0]?.className), prob: preds[0]?.probability || 0, sell: false, at: Date.now() };
+    } catch { aim = null; }
+    classifying = false;
+  }
+  setTimeout(aimLoop, 450);
+}
+const aimReady = () => aim && aim.sell && Date.now() - aim.at < 1600;
 async function lockWake(){ try { wake = await navigator.wakeLock?.request("screen"); } catch { wake = null; } }
 function unlockWake(){ try { wake?.release(); } catch {} wake = null; }
 
@@ -337,6 +407,19 @@ function draw(){
     octx.fillStyle = sell ? "#E8C24A" : "rgba(20,26,23,.8)"; octx.fillRect(b.x, ly, tw, 18);
     octx.fillStyle = sell ? "#1E1704" : "#E6ECE7"; octx.fillText(label, b.x + 5, ly + 3);
   }
+  if (!net) return;
+  // center circle + what it sees
+  const r = AIM * Math.min(m.vw, m.vh) * m.s / 2, cx = m.r.width / 2, cy = m.r.height / 2;
+  const on = aimReady() && aim.prob >= 0.45;
+  octx.setLineDash(on ? [] : [6, 6]); octx.lineWidth = on ? 2.5 : 1.5;
+  octx.strokeStyle = on ? "#E8C24A" : "rgba(230,236,231,.6)";
+  octx.beginPath(); octx.arc(cx, cy, r, 0, Math.PI * 2); octx.stroke(); octx.setLineDash([]);
+  if (aim && Date.now() - aim.at < 1600 && aim.prob >= 0.2) {
+    const label = aim.sell ? `${aim.name} ${Math.round(aim.prob * 100)}%${on ? "  +" : ""}` : "Not on the list · tap Capture now";
+    const tw = octx.measureText(label).width + 12, lx = cx - tw / 2, ly = cy + r + 6;
+    octx.fillStyle = aim.sell ? "#E8C24A" : "rgba(20,26,23,.8)"; octx.fillRect(lx, ly, tw, 19);
+    octx.fillStyle = aim.sell ? "#1E1704" : "#E6ECE7"; octx.fillText(label, lx + 6, ly + 3);
+  }
 }
 window.addEventListener("resize", draw);
 
@@ -347,8 +430,12 @@ ov.addEventListener("click", e => {
   const hit = dets.filter(d => SELL[d.cls]).map(d => ({ d, b: toScreen(m, d) }))
     .filter(o => px >= o.b.x && px <= o.b.x + o.b.w && py >= o.b.y && py <= o.b.y + o.b.h)
     .sort((a, b) => a.b.w * a.b.h - b.b.w * b.b.h)[0];
-  if (hit) capture(false, [hit.d]);
+  if (hit) { capture(false, [hit.d]); return; }
+  // tap inside the circle to add what it's naming
+  const r = AIM * Math.min(m.vw, m.vh) * m.s / 2;
+  if (aimReady() && Math.hypot(px - m.r.width / 2, py - m.r.height / 2) <= r) capture(false, [aimCand()]);
 });
+function aimCand(){ const a = aimRegion(); return { cls: "im:" + aim.key, name: aim.name, score: aim.prob, x: a.x, y: a.y, w: a.w, h: a.h }; }
 
 /* ---------- increments ---------- */
 function signature(){
@@ -391,7 +478,7 @@ function capture(forced, only){
   frame.getContext("2d").drawImage(video, 0, 0, frame.width, frame.height);
   const FW = frame.width, FH = frame.height;
 
-  let cands = (only || dets).filter(d => SELL[d.cls] && (only || d.score >= S.conf) && d.w * d.h >= 0.008);
+  let cands = (only || dets).filter(d => (SELL[d.cls] || d.name) && (only || d.score >= S.conf) && d.w * d.h >= 0.008);
   // collapse grouped classes (books) into one box covering all of them
   for (const cls of GROUP) {
     const g = cands.filter(d => d.cls === cls);
@@ -404,6 +491,11 @@ function capture(forced, only){
   const fx = $("#flash"), sw = $("#sweep");
   fx.classList.remove("go"); sw.classList.remove("go"); void fx.offsetWidth; fx.classList.add("go"); sw.classList.add("go");
 
+  // center circle adds its object unless a box already covers the center (avoids "Laptop" + "Notebook")
+  if (!only && aimReady()) {
+    const covered = cands.some(d => d.x < .5 && d.x + d.w > .5 && d.y < .5 && d.y + d.h > .5);
+    if ((aim.prob >= 0.45 && !covered) || (forced && !cands.length)) cands.push(aimCand());
+  }
   // "Capture now" with nothing detected: save the middle of the frame as an unnamed lot
   if (!cands.length && forced) cands = [{ cls: "", score: 0, x: .2, y: .15, w: .6, h: .7 }];
 
@@ -423,7 +515,7 @@ function capture(forced, only){
     const sz = Math.min(side, FW, FH);
     const rec = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      lot: ++lot, cls: d.cls, name: d.cls ? SELL[d.cls] + (d.count ? ` (about ${d.count})` : "") : "",
+      lot: ++lot, cls: d.cls, name: d.name || (SELL[d.cls] ? SELL[d.cls] + (d.count ? ` (about ${d.count})` : "") : ""),
       details: "", price: "", status: "To sell", hash,
       thumb: cropURL(frame, sx, sy, sz, 144, .7), crop: cropURL(frame, sx, sy, sz, 560, .8), at: Date.now()
     };
@@ -447,6 +539,39 @@ items.forEach(i => { if (i.name === "Unnamed item") i.name = ""; }); // lots sav
 const ebay = q => "https://www.ebay.com/sch/i.html?_nkw=" + encodeURIComponent(q) + "&LH_Sold=1&LH_Complete=1&_sop=13";
 const gshop = q => "https://www.google.com/search?tbm=shop&q=" + encodeURIComponent(q + " used");
 const canShareFiles = (() => { try { return !!navigator.canShare && navigator.canShare({ files: [new File([""], "t.jpg", { type: "image/jpeg" })] }); } catch { return false; } })();
+
+function dataURLtoBlob(u){
+  const [head, b64] = u.split(","), bin = atob(b64), a = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+  return new Blob([a], { type: (head.match(/data:(.*?);/) || [])[1] || "image/jpeg" });
+}
+/* Google Lens visual search: posts the lot photo the same way Chrome's own "search with image" form does.
+   Unofficial endpoint. Built synchronously so the tap still counts as a user action and the new tab isn't blocked. */
+function googleLens(it){
+  const src = it.crop || it.thumb; if (!src) return false;
+  const size = it.crop ? 560 : 144;
+  const form = document.createElement("form");
+  form.method = "POST"; form.enctype = "multipart/form-data"; form.target = "_blank";
+  form.action = "https://lens.google.com/v3/upload?" + new URLSearchParams({ ep: "cntpubb", hl: navigator.language || "en", st: String(Date.now()), re: "df", s: "4", vpw: String(size), vph: String(size) });
+  const input = document.createElement("input"); input.type = "file"; input.name = "encoded_image";
+  const dt = new DataTransfer(); dt.items.add(new File([dataURLtoBlob(src)], `lot-${pad(it.lot)}.jpg`, { type: "image/jpeg" }));
+  input.files = dt.files;
+  form.append(input); form.hidden = true; document.body.append(form);
+  form.submit(); setTimeout(() => form.remove(), 1500);
+  return true;
+}
+
+/* Save the lot photo to the phone (Downloads), so it can be picked in eBay's image search. */
+function savePhoto(it){
+  const src = it.crop || it.thumb; if (!src) return "";
+  const slug = (it.name || "item").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30) || "item";
+  const name = `lot-${pad(it.lot)}-${slug}.jpg`;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(dataURLtoBlob(src)); a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  return name;
+}
 
 async function lens(it, btn){
   const src = it.crop || it.thumb;
@@ -478,13 +603,24 @@ function renderLots(){
         </div>
         <input class="details" id="d-${it.id}" placeholder="Brand, model, size (find it with Lens)" value="${esc(it.details)}" aria-label="Details for lot ${it.lot}">
         <div class="acts">
-          <button class="btn" data-a="lens">${canShareFiles ? "Lens" : "Save photo for Lens"}</button>
-          <a class="btn ebay" data-a="ebay" target="_blank" rel="noopener">eBay sold ↗</a>
-          <a class="btn" data-a="gshop" target="_blank" rel="noopener">Google Shopping ↗</a>
+          <button class="btn ebay" data-a="glens">Google Lens ↗</button>
+          <button class="btn ebay" data-a="ephoto">eBay by photo</button>
+          <a class="btn" data-a="ebay" target="_blank" rel="noopener">eBay sold ↗</a>
+          <a class="btn" data-a="gshop" target="_blank" rel="noopener">Shopping ↗</a>
         </div>
-        <p class="needname" data-a="need" hidden>Name it first (tap Lens to identify it), then check prices.</p>
+        <div class="steps" data-a="esteps" hidden>
+          <p><b>Photo saved as <span data-a="fname"></span>.</b> On eBay:</p>
+          <ol>
+            <li>Tap the camera in the search bar, then the gallery icon at the bottom left.</li>
+            <li>Pick the saved photo.</li>
+            <li>Tap <b>Sold Items</b> to see what it actually sold for.</li>
+          </ol>
+          <a class="btn ebay" href="https://www.ebay.com/" target="_blank" rel="noopener">Open eBay ↗</a>
+        </div>
+        <p class="needname" data-a="need" hidden>Type a name to check eBay sold and Shopping. Google Lens works without one.</p>
         <div class="acts">
           <select id="s-${it.id}" aria-label="Status for lot ${it.lot}">${["To sell","Listed","Sold","Keeping"].map(s => `<option ${s === it.status ? "selected" : ""}>${s}</option>`).join("")}</select>
+          <button class="linkish" data-a="lens">${canShareFiles ? "Share photo" : "Save photo"}</button>
           <button class="linkish" data-a="rm">Remove</button>
         </div>
       </div>`;
@@ -506,6 +642,13 @@ function renderLots(){
     el.querySelector(".tag input").addEventListener("change", e => { const n = parseFloat(String(e.target.value).replace(/[^0-9.]/g, "")); it.price = Number.isFinite(n) ? String(n) : ""; e.target.value = it.price; saveI(); updateUI(); });
     el.querySelector("select").addEventListener("change", e => { it.status = e.target.value; saveI(); updateUI(); });
     el.querySelector('[data-a="lens"]').onclick = e => lens(it, e.currentTarget);
+    el.querySelector('[data-a="glens"]').onclick = e => { if (!googleLens(it)) e.currentTarget.textContent = "No photo saved"; };
+    el.querySelector('[data-a="ephoto"]').onclick = e => {
+      const name = savePhoto(it);
+      if (!name) { e.currentTarget.textContent = "No photo saved"; return; }
+      el.querySelector('[data-a="fname"]').textContent = name;
+      el.querySelector('[data-a="esteps"]').hidden = false;
+    };
     el.querySelector('[data-a="rm"]').onclick = () => { items = items.filter(x => x.id !== it.id); saveI(); renderLots(); };
     box.append(el);
   }
