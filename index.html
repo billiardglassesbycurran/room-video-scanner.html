@@ -70,6 +70,9 @@ main{padding:16px max(16px,env(safe-area-inset-right,0px)) calc(32px + env(safe-
 .btn{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:7px 11px;font-size:13px;font-weight:600;min-height:36px;text-decoration:none;color:var(--ink);display:inline-flex;align-items:center;gap:6px}
 .btn.warn{border-color:var(--bad);color:var(--bad)}
 .btn.ebay{border-color:var(--tag);}
+.btn.off{opacity:.4;border-color:var(--line)}
+.needname{font-size:12px;color:var(--warn);margin:0}
+.name::placeholder{color:var(--warn);opacity:.9}
 .notice{border-left:3px solid var(--warn);background:var(--panel);padding:8px 12px;border-radius:0 6px 6px 0;font-size:14px;margin:0}
 .hint{color:var(--muted);font-size:13px;margin:0}
 .lots{display:flex;flex-direction:column;gap:10px}
@@ -182,7 +185,7 @@ dialog::backdrop{background:rgba(0,0,0,.6)}
 <script>
 (function(){
 "use strict";
-const VERSION = "v2 · on-device";
+const VERSION = "v2.1 · on-device";
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const money = n => "$" + Math.round(n).toLocaleString("en-US");
@@ -420,7 +423,7 @@ function capture(forced, only){
     const sz = Math.min(side, FW, FH);
     const rec = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      lot: ++lot, cls: d.cls, name: d.cls ? SELL[d.cls] + (d.count ? ` (about ${d.count})` : "") : "Unnamed item",
+      lot: ++lot, cls: d.cls, name: d.cls ? SELL[d.cls] + (d.count ? ` (about ${d.count})` : "") : "",
       details: "", price: "", status: "To sell", hash,
       thumb: cropURL(frame, sx, sy, sz, 144, .7), crop: cropURL(frame, sx, sy, sz, 560, .8), at: Date.now()
     };
@@ -438,7 +441,9 @@ function cropURL(src, sx, sy, sz, out, q){
 }
 
 /* ---------- ledger ---------- */
-const query = i => (i.details ? i.details + " " : "") + i.name.replace(/\s*\(about \d+\)/, "");
+// Search text = details + name. An unnamed lot has no search text, so its comp links stay off.
+const query = i => ((i.details ? i.details + " " : "") + (i.name || "").replace(/\s*\(about \d+\)/, "")).trim();
+items.forEach(i => { if (i.name === "Unnamed item") i.name = ""; }); // lots saved by v2 before this fix
 const ebay = q => "https://www.ebay.com/sch/i.html?_nkw=" + encodeURIComponent(q) + "&LH_Sold=1&LH_Complete=1&_sop=13";
 const gshop = q => "https://www.google.com/search?tbm=shop&q=" + encodeURIComponent(q + " used");
 const canShareFiles = (() => { try { return !!navigator.canShare && navigator.canShare({ files: [new File([""], "t.jpg", { type: "image/jpeg" })] }); } catch { return false; } })();
@@ -467,24 +472,37 @@ function renderLots(){
         <div class="head">
           <div style="min-width:0;flex:1">
             <div class="lotno">Lot ${pad(it.lot)}</div>
-            <input class="name" id="n-${it.id}" value="${esc(it.name)}" aria-label="Lot ${it.lot} name">
+            <input class="name" id="n-${it.id}" value="${esc(it.name)}" placeholder="Name this item" aria-label="Lot ${it.lot} name">
           </div>
           <label class="tag" for="p-${it.id}">$<input id="p-${it.id}" inputmode="decimal" placeholder="price" value="${esc(it.price)}" aria-label="Your price for lot ${it.lot}"></label>
         </div>
         <input class="details" id="d-${it.id}" placeholder="Brand, model, size (find it with Lens)" value="${esc(it.details)}" aria-label="Details for lot ${it.lot}">
         <div class="acts">
           <button class="btn" data-a="lens">${canShareFiles ? "Lens" : "Save photo for Lens"}</button>
-          <a class="btn ebay" data-a="ebay" href="${ebay(query(it))}" target="_blank" rel="noopener">eBay sold ↗</a>
-          <a class="btn" data-a="gshop" href="${gshop(query(it))}" target="_blank" rel="noopener">Google Shopping ↗</a>
+          <a class="btn ebay" data-a="ebay" target="_blank" rel="noopener">eBay sold ↗</a>
+          <a class="btn" data-a="gshop" target="_blank" rel="noopener">Google Shopping ↗</a>
         </div>
+        <p class="needname" data-a="need" hidden>Name it first (tap Lens to identify it), then check prices.</p>
         <div class="acts">
           <select id="s-${it.id}" aria-label="Status for lot ${it.lot}">${["To sell","Listed","Sold","Keeping"].map(s => `<option ${s === it.status ? "selected" : ""}>${s}</option>`).join("")}</select>
           <button class="linkish" data-a="rm">Remove</button>
         </div>
       </div>`;
-    const refreshLinks = () => { el.querySelector('[data-a="ebay"]').href = ebay(query(it)); el.querySelector('[data-a="gshop"]').href = gshop(query(it)); };
-    el.querySelector(".name").addEventListener("change", e => { it.name = e.target.value.trim() || it.name; saveI(); refreshLinks(); });
-    el.querySelector(".details").addEventListener("change", e => { it.details = e.target.value.trim(); saveI(); refreshLinks(); });
+    const links = [["ebay", ebay], ["gshop", gshop]].map(([k, fn]) => ({ a: el.querySelector(`[data-a="${k}"]`), fn }));
+    const need = el.querySelector('[data-a="need"]'), nameIn = el.querySelector(".name"), detIn = el.querySelector(".details");
+    const refreshLinks = () => {
+      const q = query({ name: nameIn.value.trim(), details: detIn.value.trim() });
+      for (const { a, fn } of links) {
+        if (q) { a.href = fn(q); a.classList.remove("off"); a.removeAttribute("aria-disabled"); }
+        else { a.removeAttribute("href"); a.classList.add("off"); a.setAttribute("aria-disabled", "true"); }
+      }
+      if (q) need.hidden = true;
+    };
+    for (const { a } of links) a.addEventListener("click", e => { if (!a.getAttribute("href")) { e.preventDefault(); need.hidden = false; nameIn.focus(); } });
+    nameIn.addEventListener("input", refreshLinks); detIn.addEventListener("input", refreshLinks);
+    refreshLinks();
+    nameIn.addEventListener("change", e => { it.name = e.target.value.trim(); saveI(); });
+    detIn.addEventListener("change", e => { it.details = e.target.value.trim(); saveI(); });
     el.querySelector(".tag input").addEventListener("change", e => { const n = parseFloat(String(e.target.value).replace(/[^0-9.]/g, "")); it.price = Number.isFinite(n) ? String(n) : ""; e.target.value = it.price; saveI(); updateUI(); });
     el.querySelector("select").addEventListener("change", e => { it.status = e.target.value; saveI(); updateUI(); });
     el.querySelector('[data-a="lens"]').onclick = e => lens(it, e.currentTarget);
@@ -495,7 +513,7 @@ function renderLots(){
 }
 
 $("#copy-btn").onclick = async () => {
-  const txt = items.map(i => `Lot ${pad(i.lot)}  ${i.name}${i.details ? " · " + i.details : ""}  ${i.price ? money(i.price) : "(no price)"}  [${i.status}]`).join("\n")
+  const txt = items.map(i => `Lot ${pad(i.lot)}  ${i.name || "(unnamed)"}${i.details ? " · " + i.details : ""}  ${i.price ? money(i.price) : "(no price)"}  [${i.status}]`).join("\n")
     + "\n\nTotal priced: " + $("#total").textContent;
   const b = $("#copy-btn");
   try { await navigator.clipboard.writeText(txt); b.textContent = "Copied"; } catch { b.textContent = "Copy failed"; }
